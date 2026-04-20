@@ -132,7 +132,7 @@ class PrimalSurvivalEnv(gym.Env):
         # Agent
         ax = random.uniform(-AGENT_SPAWN_RADIUS, AGENT_SPAWN_RADIUS)
         ay = random.uniform(-AGENT_SPAWN_RADIUS, AGENT_SPAWN_RADIUS)
-        az = self._get_terrain_height(ax, ay) + AGENT_SPAWN_Z_OFFSET + PELVIS_HEIGHT_ABOVE_FEET
+        az = self._get_terrain_height(ax, ay) + AGENT_SPAWN_Z_OFFSET + PELVIS_HEIGHT_ABOVE_FEET + 1.0
         color = AGENT_COLORS[self.agent_index % AGENT_COUNT]
         self.agent = Humanoid(
             self.physics_client,
@@ -357,12 +357,15 @@ class PrimalSurvivalEnv(gym.Env):
         pos, ori = p.getBasePositionAndOrientation(
             body_id, physicsClientId=self.physics_client
         )
-        z = self._get_terrain_height(pos[0], pos[1]) + 2.0
+        # Use the fixed height function + 5.0 units of air
+        target_z = self._get_terrain_height(pos[0], pos[1]) + 5.0
+        
         p.resetBasePositionAndOrientation(
-            body_id, [pos[0], pos[1], z], ori,
+            body_id, 
+            [pos[0], pos[1], target_z], 
+            ori,
             physicsClientId=self.physics_client,
         )
-
     # ------------------------------------------------------------------
     # Observation assembly
     # ------------------------------------------------------------------
@@ -537,14 +540,22 @@ class PrimalSurvivalEnv(gym.Env):
 
     def _get_terrain_height(self, x: float, y: float) -> float:
         """Query terrain height at (x, y) via a downward raycast."""
+        # We cast from 100 down to -50
         result = p.rayTest(
-            [x, y, TERRAIN_AMPLITUDE + 5.0],
-            [x, y, -10.0],
+            [x, y, 100.0],
+            [x, y, -50.0],
             physicsClientId=self.physics_client,
         )
-        if result and result[0][0] >= 0:
-            return float(result[0][3][2])  # hitPosition z
-        return 0.0
+        
+        if result:
+            for hit in result:
+                hit_id = hit[0]
+                # ONLY return the height if we hit the terrain ID
+                if hit_id == self._terrain_id:
+                    return float(hit[3][2])
+        
+        # Fallback to a safe middle-ground height if ray fails
+        return 5.0
 
     def _mammoth_in_fov(self, m: Any) -> bool:
         """True if the mammoth is within the agent's vision cone."""

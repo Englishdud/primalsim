@@ -27,12 +27,12 @@ AGENT_COLORS = [           # RGBA solid colours per agent
 ]
 
 # Humanoid standing height above spawn surface
-AGENT_SPAWN_Z_OFFSET = 1.5   # metres above terrain surface
+AGENT_SPAWN_Z_OFFSET = 5   # metres above terrain surface
 
 # ---------------------------------------------------------------------------
 # Agent stats
 # ---------------------------------------------------------------------------
-HUNGER_START = 95.0           # 0–100 scale
+HUNGER_START = 10.0           # 0–100 scale
 HUNGER_MAX = 100.0
 HUNGER_DRAIN_PER_STEP = 0.001 # per physics step (very slow)
 HUNGER_RESTORE_ON_EAT = 100.0 # restored to this value when eating
