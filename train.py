@@ -20,6 +20,8 @@ from config import (
 from agent_brain import (
     build_vec_env,
     load_or_create_ppo,
+    resolve_device,
+    print_gpu_info,
     TrainingStateCallback,
 )
 
@@ -54,15 +56,19 @@ def main() -> None:
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
 
+    # Resolve the device early so we can print the real name before anything else
+    resolved_device = resolve_device(args.device)
+
     print('=' * 60)
     print('  Primal Survival Simulation – PPO Training')
     print('=' * 60)
     print(f'  Parallel envs : {args.envs}')
     print(f'  Target steps  : {args.steps:,}')
-    print(f'  Device        : {args.device}')
     print(f'  Checkpoint dir: {CHECKPOINT_DIR}')
     print(f'  TensorBoard   : {LOG_DIR}')
     print('=' * 60)
+    print_gpu_info()
+    print(f'[train] Using device: {resolved_device}')
 
     # Build parallel environments
     print('[train] Spawning parallel environments...')
