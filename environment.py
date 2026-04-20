@@ -287,7 +287,7 @@ class PrimalSurvivalEnv(gym.Env):
         terrain_id = p.createMultiBody(
             baseMass=0,
             baseCollisionShapeIndex=terrain_shape,
-            basePosition=[0, 0, 0],
+            basePosition=[0, 0, TERRAIN_AMPLITUDE / 2], # Lifts the hills up
             physicsClientId=self.physics_client,
         )
         p.changeDynamics(
@@ -357,8 +357,8 @@ class PrimalSurvivalEnv(gym.Env):
         pos, ori = p.getBasePositionAndOrientation(
             body_id, physicsClientId=self.physics_client
         )
-        # Use the fixed height function + 5.0 units of air
-        target_z = self._get_terrain_height(pos[0], pos[1]) + 5.0
+        # This ensures they spawn well above the peaks and fall down
+        target_z = self._get_terrain_height(pos[0], pos[1]) + 2.0
         
         p.resetBasePositionAndOrientation(
             body_id, 
