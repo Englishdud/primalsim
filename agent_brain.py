@@ -22,11 +22,74 @@ from config import (
 from environment import PrimalSurvivalEnv
 
 
+def resolve_device(device: str = 'auto') -> torch.device:
+    """Return the best available torch.device.
+
+    Resolution order for 'auto':
+      1. CUDA (any GPU visible to PyTorch)
+      2. CPU fallback
+
+    Raises a clear warning when CUDA is requested explicitly but unavailable.
+    """
+    if device == 'cuda':
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                'CUDA requested (--device cuda) but torch.cuda.is_available() '
+                'returned False.\n'
+                'Check that:\n'
+                '  • The CUDA-enabled PyTorch wheel is installed '
+                '(pip install torch --index-url https://download.pytorch.org/whl/cu121)\n'
+                '  • CUDA drivers are installed and nvidia-smi works\n'
+                '  • CUDA_VISIBLE_DEVICES is not set to -1 or an empty string'
+            )
+        return torch.device('cuda')
+
+    if device == 'cpu':
+        return torch.device('cpu')
+
+    # 'auto': prefer CUDA
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    return torch.device('cpu')
+
+
 def _get_device(device: str = 'auto') -> str:
-    """Resolve 'auto' to 'cuda' or 'cpu' depending on availability."""
-    if device == 'auto':
-        return 'cuda' if torch.cuda.is_available() else 'cpu'
-    return device
+    """Resolve 'auto' to a device string ('cuda' or 'cpu').
+
+    Kept for backward-compat; callers that need a torch.device should use
+    resolve_device() directly.
+    """
+    return str(resolve_device(device))
+
+
+def print_gpu_info() -> None:
+    """Print a detailed GPU / CUDA status block to stdout."""
+    print('-' * 60)
+    print('  PyTorch device info')
+    print(f'  PyTorch version : {torch.__version__}')
+    print(f'  CUDA available  : {torch.cuda.is_available()}')
+
+    if torch.cuda.is_available():
+        print(f'  CUDA version    : {torch.version.cuda}')
+        n = torch.cuda.device_count()
+        print(f'  GPU count       : {n}')
+        for i in range(n):
+            props = torch.cuda.get_device_properties(i)
+            mem_gb = props.total_memory / 1024**3
+            print(
+                f'  GPU {i}           : {props.name}  '
+                f'({mem_gb:.1f} GB, compute {props.major}.{props.minor})'
+            )
+        cur = torch.cuda.current_device()
+        print(f'  Active GPU      : {cur} – {torch.cuda.get_device_name(cur)}')
+        # Enable cuDNN auto-tuner for fixed-size inputs (gives ~10-20% speedup)
+        torch.backends.cudnn.benchmark = True
+        print('  cuDNN benchmark : enabled')
+    else:
+        print('  Training will run on CPU (slower).')
+        print('  Install the CUDA wheel: '
+              'pip install torch --index-url https://download.pytorch.org/whl/cu121')
+    print('-' * 60)
 
 
 def make_env_factory(agent_index: int):
@@ -53,9 +116,9 @@ def build_vec_env(n_envs: int = N_ENVS) -> SubprocVecEnv:
 
 def build_ppo(vec_env: VecEnv, device: str = 'auto') -> PPO:
     """Construct a fresh PPO model with the hyper-parameters from config.py."""
-    resolved = _get_device(device)
-    print(f'[agent_brain] Building PPO on device: {resolved}')
-    return PPO(
+    dev = resolve_device(device)
+    print(f'[agent_brain] Building fresh PPO on device: {dev}')
+    model = PPO(
         'MlpPolicy',
         vec_env,
         learning_rate=PPO_LEARNING_RATE,
@@ -64,9 +127,11 @@ def build_ppo(vec_env: VecEnv, device: str = 'auto') -> PPO:
         n_epochs=PPO_N_EPOCHS,
         gamma=PPO_GAMMA,
         tensorboard_log=LOG_DIR,
-        device=resolved,
+        device=dev,
         verbose=1,
     )
+    _verify_model_device(model, dev)
+    return model
 
 
 def load_or_create_ppo(
@@ -78,12 +143,14 @@ def load_or_create_ppo(
     Returns:
         (model, steps_already_trained)
     """
-    resolved   = _get_device(device)
+    dev        = resolve_device(device)
     latest_zip = os.path.join(CHECKPOINT_DIR, 'latest.zip')
     state_file = os.path.join(CHECKPOINT_DIR, 'training_state.json')
 
     if os.path.isfile(latest_zip):
-        model = PPO.load(latest_zip, env=vec_env, device=resolved)
+        print(f'[agent_brain] Loading checkpoint {latest_zip} → device {dev}')
+        model = PPO.load(latest_zip, env=vec_env, device=dev)
+        _verify_model_device(model, dev)
         steps = 0
         if os.path.isfile(state_file):
             with open(state_file) as fh:
@@ -112,10 +179,31 @@ def load_policy_for_play(
         print(f'[agent_brain] Checkpoint not found: {checkpoint_path}')
         return None
 
-    resolved = _get_device(device)
-    model = PPO.load(checkpoint_path, device=resolved)
-    print(f'[agent_brain] Loaded policy from {checkpoint_path} on {resolved}')
+    dev   = resolve_device(device)
+    model = PPO.load(checkpoint_path, device=dev)
+    _verify_model_device(model, dev)
+    print(f'[agent_brain] Loaded policy from {checkpoint_path} on {dev}')
     return model
+
+
+def _verify_model_device(model: PPO, expected: torch.device) -> None:
+    """Confirm the policy network parameters are on the expected device.
+
+    Prints a warning if there is a mismatch (e.g. checkpoint was on CPU but
+    CUDA was requested and the tensors were not moved).
+    """
+    try:
+        actual = next(model.policy.parameters()).device
+        if actual.type != expected.type:
+            print(
+                f'[agent_brain] WARNING: model parameters are on {actual} '
+                f'but {expected} was requested.  Forcing move…'
+            )
+            model.policy.to(expected)
+            actual = next(model.policy.parameters()).device
+        print(f'[agent_brain] Policy network confirmed on device: {actual}')
+    except StopIteration:
+        pass  # no parameters – shouldn't happen with MlpPolicy
 
 
 # ---------------------------------------------------------------------------
